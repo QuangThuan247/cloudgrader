@@ -225,7 +225,29 @@ SCOREBOARD_TEMPLATE = """
     """ + NAVBAR_HTML + """
     <div class="container">
         <div class="card shadow p-4">
-            <h4 class="text-primary mb-3">🏆 Bảng Xếp Hạng Điểm Theo Lớp</h4>
+            <h4 class="text-primary mb-3">🏆 Bảng Xếp Hạng Điểm</h4>
+            
+            <!-- FORM BỘ LỌC THEO LỚP VÀ THEO NGÀY -->
+            <form method="get" action="/scoreboard" class="row g-3 mb-4 bg-body-tertiary p-3 rounded border">
+                <div class="col-md-4">
+                    <label class="form-label fw-bold">Lớp học:</label>
+                    <select name="selected_class" class="form-select">
+                        <option value="">-- Tất cả các lớp --</option>
+                        {% for c in classes %}
+                            <option value="{{ c }}" {% if selected_class == c %}selected{% endif %}>{{ c }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label fw-bold">Ngày nộp bài:</label>
+                    <input type="date" name="selected_date" class="form-control" value="{{ selected_date }}">
+                </div>
+                <div class="col-md-4 d-flex align-items-end gap-2">
+                    <button type="submit" class="btn btn-primary flex-fill">🔍 Lọc Kết Quả</button>
+                    <a href="/scoreboard" class="btn btn-outline-secondary">Đặt lại</a>
+                </div>
+            </form>
+
             <div class="table-responsive">
                 <table class="table table-bordered table-striped align-middle text-center">
                     <thead class="table-primary">
@@ -245,6 +267,10 @@ SCOREBOARD_TEMPLATE = """
                             <td><span class="badge bg-info text-dark">{{ rank.class_name }}</span></td>
                             <td>{{ rank.total_subs }}</td>
                             <td><span class="badge bg-success fs-6">{{ "%.2f"|format(rank.total_score) }}</span></td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-muted">Không có dữ liệu bài nộp phù hợp với điều kiện lọc.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -314,7 +340,7 @@ async def submit_code(request: Request, file: UploadFile = File(...)):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO submissions (telegram_id, problem_name, language, code_content, status, score,submitted_at)
+        INSERT INTO submissions (telegram_id, problem_name, language, code_content, status, score, submitted_at)
         VALUES (%s, %s, %s, %s, 'pending', 0.0, NOW())
         RETURNING submission_id
     ''', (user_id, problem_name, ext, code_content))
@@ -344,7 +370,8 @@ async def history(request: Request):
 
     submissions = [{
         "id": r[0], "problem": r[1], "lang": r[2], "status": r[3],
-        "score": r[4], "feedback": r[5], "time": r[6]
+        "score": r[4], "feedback": r[5],
+        "time": r[6].strftime("%H:%M:%S %d/%m/%Y") if r[6] else "Vừa xong"
     } for r in rows]
 
     return HTMLResponse(content=jinja2.Template(HISTORY_TEMPLATE).render(
@@ -352,22 +379,47 @@ async def history(request: Request):
     ))
 
 @app.get("/scoreboard", response_class=HTMLResponse)
-async def scoreboard(request: Request):
+async def scoreboard(request: Request, selected_class: str = "", selected_date: str = ""):
     user_id = request.cookies.get("user_id")
     if not user_id: return RedirectResponse(url="/login", status_code=303)
     user = get_user_info(user_id)
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''
+
+    # Lấy danh sách danh mục Lớp cho Dropdown
+    cursor.execute("SELECT DISTINCT class_name FROM users WHERE class_name IS NOT NULL ORDER BY class_name ASC")
+    class_rows = cursor.fetchall()
+    classes = [c[0] for c in class_rows if c[0]]
+
+    # Xây dựng truy vấn lọc linh hoạt theo Lớp và Ngày
+    query = '''
         SELECT u.full_name, u.telegram_id, u.class_name, 
                COUNT(s.submission_id) as total_subs,
                COALESCE(SUM(s.score), 0) as total_score
         FROM users u
         LEFT JOIN submissions s ON u.telegram_id = s.telegram_id
+    '''
+    where_clauses = []
+    params = []
+
+    if selected_class.strip():
+        where_clauses.append("u.class_name = %s")
+        params.append(selected_class.strip())
+
+    if selected_date.strip():
+        where_clauses.append("DATE(s.submitted_at) = %s")
+        params.append(selected_date.strip())
+
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+
+    query += '''
         GROUP BY u.telegram_id, u.full_name, u.class_name
         ORDER BY total_score DESC
-    ''')
+    '''
+
+    cursor.execute(query, tuple(params))
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -378,7 +430,12 @@ async def scoreboard(request: Request):
     } for r in rows]
 
     return HTMLResponse(content=jinja2.Template(SCOREBOARD_TEMPLATE).render(
-        full_name=user[0], class_name=user[1], ranks=ranks
+        full_name=user[0],
+        class_name=user[1],
+        ranks=ranks,
+        classes=classes,
+        selected_class=selected_class,
+        selected_date=selected_date
     ))
 
 # --- API HỆ THỐNG MÁY CHẤM ---
