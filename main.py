@@ -71,9 +71,52 @@ LOGIN_TEMPLATE = """
             <div class="mb-3"><label class="form-label">Mật khẩu:</label><input type="password" class="form-control" name="password" required></div>
             <button type="submit" class="btn btn-primary w-100">Đăng Nhập</button>
         </form>
+        <div class="text-center mt-3">
+            <a href="/register">Chưa có tài khoản? Đăng ký ngay</a>
+        </div>
     </div>
 </div>
 </body></html>
+"""
+
+REGISTER_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8"><title>Đăng ký tài khoản</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light d-flex align-items-center vh-100">
+<div class="container" style="max-width: 450px;">
+    <div class="card shadow p-4">
+        <h3 class="text-success text-center mb-3">📝 Đăng Ký Tài Khoản</h3>
+        {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+        <form action="/register" method="post">
+            <div class="mb-3">
+                <label class="form-label">Mã học sinh / ID:</label>
+                <input type="text" class="form-control" name="telegram_id" placeholder="Ví dụ: HS123" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Họ và Tên:</label>
+                <input type="text" class="form-control" name="full_name" placeholder="Ví dụ: Nguyễn Văn A" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Lớp:</label>
+                <input type="text" class="form-control" name="class_name" placeholder="Ví dụ: 12A1" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Mật khẩu:</label>
+                <input type="password" class="form-control" name="password" required>
+            </div>
+            <button type="submit" class="btn btn-success w-100">Tạo Tài Khoản</button>
+        </form>
+        <div class="text-center mt-3">
+            <a href="/login">Đã có tài khoản? Đăng nhập</a>
+        </div>
+    </div>
+</div>
+</body>
+</html>
 """
 
 DASHBOARD_TEMPLATE = """
@@ -310,6 +353,44 @@ async def login_post(response: Response, telegram_id: str = Form(...), password:
     res.set_cookie(key="user_id", value=telegram_id.strip())
     return res
 
+@app.get("/register", response_class=HTMLResponse)
+async def register_get():
+    return HTMLResponse(content=jinja2.Template(REGISTER_TEMPLATE).render(error=None))
+
+@app.post("/register", response_class=HTMLResponse)
+async def register_post(
+    telegram_id: str = Form(...),
+    full_name: str = Form(...),
+    class_name: str = Form(...),
+    password: str = Form(...)
+):
+    user_id = telegram_id.strip()
+    name = full_name.strip()
+    cls = class_name.strip()
+    pwd = password.strip()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Kiểm tra xem User ID đã tồn tại hay chưa
+    cursor.execute("SELECT telegram_id FROM users WHERE telegram_id = %s", (user_id,))
+    if cursor.fetchone():
+        cursor.close()
+        conn.close()
+        return HTMLResponse(content=jinja2.Template(REGISTER_TEMPLATE).render(error="Mã ID / Tên đăng nhập này đã tồn tại!"))
+
+    # Thêm tài khoản mới
+    cursor.execute(
+        "INSERT INTO users (telegram_id, full_name, class_name, password) VALUES (%s, %s, %s, %s)",
+        (user_id, name, cls, pwd)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    # Tự động chuyển đến đăng nhập sau khi tạo thành công
+    return RedirectResponse(url="/login", status_code=303)
+
 def get_user_info(user_id):
     if not user_id:
         return None
@@ -379,17 +460,13 @@ async def history(request: Request):
 
     submissions = []
     for r in rows:
-        # 1. Kiểm tra an toàn cho submitted_at
         submitted_time = r[6]
         if submitted_time and hasattr(submitted_time, 'strftime'):
             time_str = submitted_time.strftime("%H:%M:%S %d/%m/%Y")
         else:
             time_str = "Vừa xong"
 
-        # 2. Đảm bảo score luôn là kiểu float hợp lệ
         score_val = float(r[4]) if r[4] is not None else 0.0
-
-        # 3. Phản hồi log
         feedback_val = r[5] if r[5] else "Chưa có phản hồi từ máy chấm"
 
         submissions.append({
@@ -416,12 +493,10 @@ async def scoreboard(request: Request, selected_class: str = "", selected_date: 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Lấy danh sách danh mục Lớp cho Dropdown
     cursor.execute("SELECT DISTINCT class_name FROM users WHERE class_name IS NOT NULL ORDER BY class_name ASC")
     class_rows = cursor.fetchall()
     classes = [c[0] for c in class_rows if c[0]]
 
-    # Xây dựng truy vấn lọc linh hoạt theo Lớp và Ngày
     query = '''
         SELECT u.full_name, u.telegram_id, u.class_name, 
                COUNT(s.submission_id) as total_subs,
