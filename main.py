@@ -183,7 +183,7 @@ HISTORY_TEMPLATE = """
                                     <span class="badge bg-info text-dark">Đang chờ</span>
                                 {% endif %}
                             </td>
-                            <td><b class="text-primary">{{ "%.2f"|format(sub.score or 0) }}/10</b></td>
+                            <td><b class="text-primary">{{ "%.2f"|format(sub.score) }}/10</b></td>
                             <td>
                                 <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#detailModal{{ sub.id }}">Xem Log</button>
                                 
@@ -196,7 +196,7 @@ HISTORY_TEMPLATE = """
                                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                                       </div>
                                       <div class="modal-body text-start">
-                                        <pre class="bg-dark text-light p-3 rounded" style="max-height: 400px; overflow-y: auto;">{{ sub.feedback or "Chưa có phản hồi từ máy chấm" }}</pre>
+                                        <pre class="bg-dark text-light p-3 rounded" style="max-height: 400px; overflow-y: auto;">{{ sub.feedback }}</pre>
                                       </div>
                                     </div>
                                   </div>
@@ -311,13 +311,18 @@ async def login_post(response: Response, telegram_id: str = Form(...), password:
     return res
 
 def get_user_info(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT full_name, class_name FROM users WHERE telegram_id = %s", (user_id,))
-    user = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return user
+    if not user_id:
+        return None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT full_name, class_name FROM users WHERE telegram_id = %s", (user_id,))
+        user = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return user
+    except Exception:
+        return None
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -353,8 +358,12 @@ async def submit_code(request: Request, file: UploadFile = File(...)):
 @app.get("/history", response_class=HTMLResponse)
 async def history(request: Request):
     user_id = request.cookies.get("user_id")
-    if not user_id: return RedirectResponse(url="/login", status_code=303)
+    if not user_id: 
+        return RedirectResponse(url="/login", status_code=303)
+    
     user = get_user_info(user_id)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -368,11 +377,30 @@ async def history(request: Request):
     cursor.close()
     conn.close()
 
-    submissions = [{
-        "id": r[0], "problem": r[1], "lang": r[2], "status": r[3],
-        "score": r[4], "feedback": r[5],
-        "time": r[6].strftime("%H:%M:%S %d/%m/%Y") if r[6] else "Vừa xong"
-    } for r in rows]
+    submissions = []
+    for r in rows:
+        # 1. Kiểm tra an toàn cho submitted_at
+        submitted_time = r[6]
+        if submitted_time and hasattr(submitted_time, 'strftime'):
+            time_str = submitted_time.strftime("%H:%M:%S %d/%m/%Y")
+        else:
+            time_str = "Vừa xong"
+
+        # 2. Đảm bảo score luôn là kiểu float hợp lệ
+        score_val = float(r[4]) if r[4] is not None else 0.0
+
+        # 3. Phản hồi log
+        feedback_val = r[5] if r[5] else "Chưa có phản hồi từ máy chấm"
+
+        submissions.append({
+            "id": r[0],
+            "problem": r[1],
+            "lang": r[2],
+            "status": r[3],
+            "score": score_val,
+            "feedback": feedback_val,
+            "time": time_str
+        })
 
     return HTMLResponse(content=jinja2.Template(HISTORY_TEMPLATE).render(
         full_name=user[0], class_name=user[1], submissions=submissions
@@ -383,6 +411,7 @@ async def scoreboard(request: Request, selected_class: str = "", selected_date: 
     user_id = request.cookies.get("user_id")
     if not user_id: return RedirectResponse(url="/login", status_code=303)
     user = get_user_info(user_id)
+    if not user: return RedirectResponse(url="/login", status_code=303)
 
     conn = get_db_connection()
     cursor = conn.cursor()
