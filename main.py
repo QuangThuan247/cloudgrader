@@ -314,8 +314,8 @@ async def submit_code(request: Request, file: UploadFile = File(...)):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO submissions (telegram_id, problem_name, language, code_content, status, score)
-        VALUES (%s, %s, %s, %s, 'pending', 0.0)
+        INSERT INTO submissions (telegram_id, problem_name, language, code_content, status, score,submitted_at)
+        VALUES (%s, %s, %s, %s, 'pending', 0.0, NOW())
         RETURNING submission_id
     ''', (user_id, problem_name, ext, code_content))
     conn.commit()
