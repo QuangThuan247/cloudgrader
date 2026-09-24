@@ -7,6 +7,13 @@ import jinja2
 
 app = FastAPI(title="Mini Codeforces - Cloud Master Server")
 
+# Ví dụ Flask/FastAPI
+@app.route('/api/reset-stuck-tasks', methods=['POST'])
+def reset_stuck_tasks():
+    # Tìm các bài status 'processing' hoặc chưa có log kết quả và chuyển về 'pending'
+    db.execute("UPDATE submissions SET status='pending' WHERE status='processing'")
+    return jsonify({"success": True})
+    
 # Lấy chuỗi kết nối PostgreSQL từ biến môi trường trên Render (Supabase)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
