@@ -1,31 +1,51 @@
 import os
 import psycopg2
-from fastapi import FastAPI, Form, UploadFile, File, Request, Response, Query
+from fastapi import FastAPI, Form, UploadFile, File, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 import jinja2
 
 app = FastAPI(title="Mini Codeforces - Master Server")
 
-# Lấy chuỗi kết nối từ biến môi trường trên Render
+# Lấy chuỗi kết nối Database từ Render
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
 
-# --- GIAO DIỆN HTML ---
+# --- HTML TEMPLATES ---
+
+NAVBAR_HTML = """
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+  <div class="container">
+    <a class="navbar-brand fw-bold text-primary" href="/dashboard">🚀 Mini Codeforces</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarNav">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item"><a class="nav-link" href="/dashboard">📤 Nộp Bài</a></li>
+        <li class="nav-item"><a class="nav-link" href="/history">📜 Lịch Sử Bài Nộp</a></li>
+        <li class="nav-item"><a class="nav-link" href="/scoreboard">🏆 Bảng Điểm</a></li>
+      </ul>
+      <span class="navbar-text me-3">Xin chào: <b>{{ full_name }}</b> (Lớp: {{ class_name }})</span>
+      <a href="/logout" class="btn btn-outline-danger btn-sm">Thoát</a>
+    </div>
+  </div>
+</nav>
+"""
+
 HOME_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <title>Mini Codeforces - Cloud Master</title>
+    <meta charset="UTF-8"><title>Mini Codeforces - Master Server</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-light">
-    <div class="container mt-5" style="max-width: 500px;">
-        <div class="card shadow text-center p-4">
+<body class="bg-light d-flex align-items-center vh-100">
+    <div class="container text-center" style="max-width: 450px;">
+        <div class="card shadow p-4">
             <h3 class="text-primary mb-3">🚀 Mini Codeforces</h3>
-            <p class="text-muted mb-4">Hệ thống chấm bài trực tuyến (Cloud Server)</p>
+            <p class="text-muted mb-4">Hệ thống chấm bài lập trình trực tuyến</p>
             <div class="d-grid gap-3">
                 <a href="/login" class="btn btn-primary btn-lg">🔑 Đăng Nhập</a>
                 <a href="/register" class="btn btn-outline-success btn-lg">📝 Đăng Ký Tài Khoản</a>
@@ -41,13 +61,13 @@ LOGIN_TEMPLATE = """
 <html lang="vi">
 <head><meta charset="UTF-8"><title>Đăng nhập</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-<body class="bg-light">
-<div class="container mt-5" style="max-width: 500px;">
+<body class="bg-light d-flex align-items-center vh-100">
+<div class="container" style="max-width: 420px;">
     <div class="card shadow p-4">
         <h3 class="text-primary text-center mb-3">🔑 Đăng Nhập</h3>
         {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
         <form action="/login" method="post">
-            <div class="mb-3"><label class="form-label">User ID:</label><input type="text" class="form-control" name="telegram_id" required></div>
+            <div class="mb-3"><label class="form-label">Tên đăng nhập / ID:</label><input type="text" class="form-control" name="telegram_id" required></div>
             <div class="mb-3"><label class="form-label">Mật khẩu:</label><input type="password" class="form-control" name="password" required></div>
             <button type="submit" class="btn btn-primary w-100">Đăng Nhập</button>
         </form>
@@ -56,38 +76,42 @@ LOGIN_TEMPLATE = """
 </body></html>
 """
 
-SUBMIT_TEMPLATE = """
+DASHBOARD_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8"><title>Nộp Bài</title>
+    <meta charset="UTF-8"><title>Nộp Bài Lập Trình</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
-    <div class="container mt-5" style="max-width: 700px;">
-        <!-- KHU VỰC HIỂN THỊ TRẠNG THÁI MÁY CHẤM -->
-        <div class="card shadow mb-4 p-3 border-0 bg-white">
-            <h5 class="card-title text-secondary mb-2">🖥️ Trạng thái Máy Chấm (Worker)</h5>
-            <div id="worker-status-box" class="alert alert-secondary mb-0 d-flex align-items-center">
-                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                <span>Đang kiểm tra kết nối tới máy chấm...</span>
+    """ + NAVBAR_HTML + """
+    <div class="container" style="max-width: 800px;">
+        <!-- KHU VỰC TRẠNG THÁI MÁY CHẤM -->
+        <div class="card shadow-sm mb-4 border-0">
+            <div class="card-body">
+                <h6 class="card-title text-muted mb-2">🖥️ Trạng Thái Máy Chấm (Worker)</h6>
+                <div id="worker-status-box" class="alert alert-secondary mb-0 py-2 d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                    <span>Đang kiểm tra máy chấm...</span>
+                </div>
             </div>
         </div>
 
+        <!-- FORM NỘP BÀI -->
         <div class="card shadow p-4">
-            <h3 class="text-primary mb-3">🚀 Nộp Bài Lập Trình</h3>
-            <p>Xin chào: <b>{{ full_name }}</b> (Lớp: {{ class_name }}) | <a href="/logout" class="text-danger">Thoát</a></p>
-            <hr>
+            <h4 class="text-primary mb-3">📤 Nộp Bài Lập Trình</h4>
             <form action="/submit" method="post" enctype="multipart/form-data">
                 <div class="mb-3">
                     <label class="form-label">Chọn file mã nguồn (.cpp hoặc .py):</label>
                     <input type="file" class="form-control" name="file" accept=".cpp,.py" required>
+                    <div class="form-text">Tên file sẽ tự động dùng làm Mã bài tập (Ví dụ: <code>PHONGHOP.cpp</code> -> Bài: <code>PHONGHOP</code>).</div>
                 </div>
-                <button type="submit" class="btn btn-success w-100">📤 Nộp Bài & Gửi Đến Máy Chấm</button>
+                <button type="submit" class="btn btn-success btn-lg w-100">🚀 Gửi Đến Máy Chấm</button>
             </form>
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         function updateWorkerStatus() {
             fetch('/api/server-status')
@@ -95,24 +119,22 @@ SUBMIT_TEMPLATE = """
                 .then(data => {
                     const box = document.getElementById('worker-status-box');
                     if (data.status === 'processing') {
-                        box.className = 'alert alert-warning mb-0 fw-bold';
+                        box.className = 'alert alert-warning mb-0 py-2 fw-bold';
                         box.innerHTML = `⚙️ <b>Đang chấm bài:</b> #${data.sub_id} | Bài: <b>${data.problem_name}</b> | Thí sinh: <b>${data.user_id}</b>`;
                     } else if (data.status === 'idle') {
-                        box.className = 'alert alert-success mb-0';
-                        box.innerHTML = `✅ <b>Máy chấm sẵn sàng:</b> Hiện tại không có bài trong hàng chờ.`;
+                        box.className = 'alert alert-success mb-0 py-2';
+                        box.innerHTML = `✅ <b>Máy chấm sẵn sàng:</b> Không có bài trong hàng chờ.`;
                     } else {
-                        box.className = 'alert alert-secondary mb-0';
-                        box.innerHTML = `💤 Máy chấm đang tạm nghỉ.`;
+                        box.className = 'alert alert-secondary mb-0 py-2';
+                        box.innerHTML = `💤 Máy chấm tạm thời chưa kết nối.`;
                     }
                 })
                 .catch(() => {
                     const box = document.getElementById('worker-status-box');
-                    box.className = 'alert alert-danger mb-0';
-                    box.innerHTML = `❌ Không thể kết nối tới Server.`;
+                    box.className = 'alert alert-danger mb-0 py-2';
+                    box.innerHTML = `❌ Không thể kiểm tra trạng thái máy chấm.`;
                 });
         }
-
-        // Tự động làm mới trạng thái mỗi 2 giây
         setInterval(updateWorkerStatus, 2000);
         updateWorkerStatus();
     </script>
@@ -120,10 +142,126 @@ SUBMIT_TEMPLATE = """
 </html>
 """
 
+HISTORY_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8"><title>Lịch Sử Bài Nộp</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    """ + NAVBAR_HTML + """
+    <div class="container">
+        <div class="card shadow p-4">
+            <h4 class="text-primary mb-3">📜 Lịch Sử Bài Nộp Của Bạn</h4>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Mã Nộp</th>
+                            <th>Thời Gian</th>
+                            <th>Bài Tập</th>
+                            <th>Ngôn Ngữ</th>
+                            <th>Trạng Thái</th>
+                            <th>Điểm Số</th>
+                            <th>Chi Tiết</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sub in submissions %}
+                        <tr>
+                            <td><b>#{{ sub.id }}</b></td>
+                            <td>{{ sub.time }}</td>
+                            <td><span class="badge bg-secondary">{{ sub.problem }}</span></td>
+                            <td><code>{{ sub.lang }}</code></td>
+                            <td>
+                                {% if sub.status == 'completed' %}
+                                    <span class="badge bg-success">Hoàn thành</span>
+                                {% elif sub.status == 'processing' %}
+                                    <span class="badge bg-warning text-dark">Đang chấm</span>
+                                {% else %}
+                                    <span class="badge bg-info text-dark">Đang chờ</span>
+                                {% endif %}
+                            </td>
+                            <td><b class="text-primary">{{ "%.2f"|format(sub.score or 0) }}/10</b></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#detailModal{{ sub.id }}">Xem Log</button>
+                                
+                                <!-- Modal Chi Tiết Log -->
+                                <div class="modal fade" id="detailModal{{ sub.id }}" tabindex="-1">
+                                  <div class="modal-dialog modal-lg">
+                                    <div class="modal-content">
+                                      <div class="modal-header">
+                                        <h5 class="modal-title">Chi Tiết Bài Nộp #{{ sub.id }} - {{ sub.problem }}</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                      </div>
+                                      <div class="modal-body text-start">
+                                        <pre class="bg-dark text-light p-3 rounded" style="max-height: 400px; overflow-y: auto;">{{ sub.feedback or "Chưa có phản hồi từ máy chấm" }}</pre>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+"""
+
+SCOREBOARD_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8"><title>Bảng Điểm Tổng Hợp</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    """ + NAVBAR_HTML + """
+    <div class="container">
+        <div class="card shadow p-4">
+            <h4 class="text-primary mb-3">🏆 Bảng Xếp Hạng Điểm Theo Lớp</h4>
+            <div class="table-responsive">
+                <table class="table table-bordered table-striped align-middle text-center">
+                    <thead class="table-primary">
+                        <tr>
+                            <th>Hạng</th>
+                            <th>Họ và Tên</th>
+                            <th>Lớp</th>
+                            <th>Số Bài Đã Nộp</th>
+                            <th>Tổng Điểm</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rank in ranks %}
+                        <tr>
+                            <td><b>{{ loop.index }}</b></td>
+                            <td class="text-start"><b>{{ rank.name }}</b> ({{ rank.id }})</td>
+                            <td><span class="badge bg-info text-dark">{{ rank.class_name }}</span></td>
+                            <td>{{ rank.total_subs }}</td>
+                            <td><span class="badge bg-success fs-6">{{ "%.2f"|format(rank.total_score) }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+"""
+
+# --- ROUTES & LOGIC ---
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    if request.cookies.get("user_id"):
-        return RedirectResponse(url="/dashboard", status_code=303)
+    if request.cookies.get("user_id"): return RedirectResponse(url="/dashboard", status_code=303)
     return HTMLResponse(content=HOME_TEMPLATE)
 
 @app.get("/login", response_class=HTMLResponse)
@@ -146,20 +284,22 @@ async def login_post(response: Response, telegram_id: str = Form(...), password:
     res.set_cookie(key="user_id", value=telegram_id.strip())
     return res
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    user_id = request.cookies.get("user_id")
-    if not user_id: return RedirectResponse(url="/login", status_code=303)
-
+def get_user_info(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT full_name, class_name FROM users WHERE telegram_id = %s", (user_id,))
     user = cursor.fetchone()
     cursor.close()
     conn.close()
+    return user
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    user_id = request.cookies.get("user_id")
+    if not user_id: return RedirectResponse(url="/login", status_code=303)
+    user = get_user_info(user_id)
     if not user: return RedirectResponse(url="/login", status_code=303)
-    return HTMLResponse(content=jinja2.Template(SUBMIT_TEMPLATE).render(full_name=user[0], class_name=user[1]))
+    return HTMLResponse(content=jinja2.Template(DASHBOARD_TEMPLATE).render(full_name=user[0], class_name=user[1]))
 
 @app.post("/submit", response_class=HTMLResponse)
 async def submit_code(request: Request, file: UploadFile = File(...)):
@@ -178,49 +318,73 @@ async def submit_code(request: Request, file: UploadFile = File(...)):
         VALUES (%s, %s, %s, %s, 'pending', 0.0)
         RETURNING submission_id
     ''', (user_id, problem_name, ext, code_content))
-    sub_id = cursor.fetchone()[0]
     conn.commit()
     cursor.close()
     conn.close()
 
-    return RedirectResponse(url=f"/waiting/{sub_id}", status_code=303)
+    return RedirectResponse(url="/history", status_code=303)
 
-@app.get("/waiting/{sub_id}", response_class=HTMLResponse)
-async def waiting_page(sub_id: int):
-    WAITING_TEMPLATE = """
-    <!DOCTYPE html>
-    <html lang="vi">
-    <head><meta charset="UTF-8"><title>Đang chấm...</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-    <body class="bg-light text-center py-5">
-        <div class="container mt-5" style="max-width: 500px;">
-            <div class="card shadow p-4">
-                <div class="spinner-border text-primary mx-auto mb-3" role="status"></div>
-                <h4>⏳ Đang chờ máy chủ chấm bài...</h4>
-                <p class="text-muted">Kết quả sẽ tự động cập nhật khi hoàn tất.</p>
-            </div>
-        </div>
-        <script>
-            setInterval(() => {
-                fetch('/api/check-status/{{ sub_id }}')
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.status === 'completed') {
-                            alert('Đã chấm xong bài!');
-                            window.location.href = '/dashboard';
-                        }
-                    });
-            }, 2000);
-        </script>
-    </body></html>
-    """
-    return HTMLResponse(content=jinja2.Template(WAITING_TEMPLATE).render(sub_id=sub_id))
+@app.get("/history", response_class=HTMLResponse)
+async def history(request: Request):
+    user_id = request.cookies.get("user_id")
+    if not user_id: return RedirectResponse(url="/login", status_code=303)
+    user = get_user_info(user_id)
 
-# --- API DÀNH CHO BÊN NGOÀI / WORKER GỌI ---
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT submission_id, problem_name, language, status, score, ai_feedback, submitted_at 
+        FROM submissions 
+        WHERE telegram_id = %s 
+        ORDER BY submission_id DESC
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    submissions = [{
+        "id": r[0], "problem": r[1], "lang": r[2], "status": r[3],
+        "score": r[4], "feedback": r[5], "time": r[6]
+    } for r in rows]
+
+    return HTMLResponse(content=jinja2.Template(HISTORY_TEMPLATE).render(
+        full_name=user[0], class_name=user[1], submissions=submissions
+    ))
+
+@app.get("/scoreboard", response_class=HTMLResponse)
+async def scoreboard(request: Request):
+    user_id = request.cookies.get("user_id")
+    if not user_id: return RedirectResponse(url="/login", status_code=303)
+    user = get_user_info(user_id)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT u.full_name, u.telegram_id, u.class_name, 
+               COUNT(s.submission_id) as total_subs,
+               COALESCE(SUM(s.score), 0) as total_score
+        FROM users u
+        LEFT JOIN submissions s ON u.telegram_id = s.telegram_id
+        GROUP BY u.telegram_id, u.full_name, u.class_name
+        ORDER BY total_score DESC
+    ''')
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    ranks = [{
+        "name": r[0], "id": r[1], "class_name": r[2],
+        "total_subs": r[3], "total_score": r[4]
+    } for r in rows]
+
+    return HTMLResponse(content=jinja2.Template(SCOREBOARD_TEMPLATE).render(
+        full_name=user[0], class_name=user[1], ranks=ranks
+    ))
+
+# --- API HỆ THỐNG MÁY CHẤM ---
 
 @app.get("/api/server-status")
 async def get_server_status():
-    """API kiểm tra xem hiện tại máy chấm đang bận hay rảnh"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -234,12 +398,7 @@ async def get_server_status():
     conn.close()
 
     if row:
-        return {
-            "status": "processing",
-            "sub_id": row[0],
-            "user_id": row[1],
-            "problem_name": row[2]
-        }
+        return {"status": "processing", "sub_id": row[0], "user_id": row[1], "problem_name": row[2]}
     return {"status": "idle"}
 
 @app.get("/api/get-pending-task")
@@ -287,16 +446,6 @@ async def reset_stuck_tasks():
     cursor.close()
     conn.close()
     return {"success": True}
-
-@app.get("/api/check-status/{sub_id}")
-async def check_status(sub_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM submissions WHERE submission_id = %s", (sub_id,))
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return {"status": row[0] if row else "unknown"}
 
 @app.get("/logout")
 async def logout(response: Response):
