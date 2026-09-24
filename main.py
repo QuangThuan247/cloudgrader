@@ -5,7 +5,7 @@ from fastapi import FastAPI, Form, UploadFile, File, Request, Response, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 import jinja2
 
-app = FastAPI(title="Mini Codeforces - Cloud Master Server")
+app = FastAPI(title="Mini Codeforces - Cloud Master Server") 
 
 @app.route('/api/reset-stuck-tasks', methods=['POST'])
 def reset_stuck_tasks():
